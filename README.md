@@ -19,6 +19,10 @@ Usage:
 
 tar -zxvf [install dir]/chaucer.tar.bz2
 
+1a. Read chaucer (optional, but recommended)
+
+find chaucer/ -type f | xargs cat | less
+
 2. Run Radamsa as a TCP server:
 
 radamsa chaucer/*.txt -n inf -o :9999
