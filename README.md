@@ -15,13 +15,13 @@ raf.rb - Ruby ALPC Fuzzer - Friday Afternoon Joke Version
 
 Usage:
 
-1. Extract chaucer:
+1. Extract Chaucer:
 
 tar -zxvf [install dir]/chaucer.tar.bz2
 
-1a. Read chaucer (optional, but recommended)
+1a. Read Chaucer (optional, but recommended)
 
-find chaucer/ -type f | xargs cat | less
+awk 'FNR==1{print ""}{print}' chaucer/* | less
 
 2. Run Radamsa as a TCP server:
 
