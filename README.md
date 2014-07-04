@@ -29,7 +29,7 @@ radamsa chaucer/*.txt -n inf -o :9999
 
 3. Run alpcrest on the target
 
-(see https://github.com/bnagy/alpcgo/cmd/alpcrest)
+( see https://github.com/bnagy/alpcgo/tree/master/cmd/alpcrest )
 
 4. Run raf.rb
 
