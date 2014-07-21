@@ -10,13 +10,13 @@ include Buggery::Raw
 # http://www.retrojunkie.com/asciiart/animals/greattit.htm
 gt = <<'eos'
 
-    ______  ___  ______ _   _ _____  ___  ___  ___     ___  ___________ 
+    ______  ___  ______ _   _ _____  ___  ___  ___     ___  ___________
     | ___ \/ _ \ | ___ \ | | /  ___| |  \/  | / _ \   |_  ||  _  | ___ \
     | |_/ / /_\ \| |_/ / | | \ `--.  | .  . |/ /_\ \    | || | | | |_/ /
-    |  __/|  _  ||    /| | | |`--. \ | |\/| ||  _  |    | || | | |    / 
-    | |   | | | || |\ \| |_| /\__/ / | |  | || | | |/\__/ /\ \_/ / |\ \ 
+    |  __/|  _  ||    /| | | |`--. \ | |\/| ||  _  |    | || | | |    /
+    | |   | | | || |\ \| |_| /\__/ / | |  | || | | |/\__/ /\ \_/ / |\ \
     \_|   \_| |_/\_| \_|\___/\____/  \_|  |_/\_| |_/\____/  \___/\_| \_|
-                                                                    
+
                          (c) @rantyben 2014
 
 
@@ -32,7 +32,7 @@ gt = <<'eos'
                                           __,',___','
                        __,,,,,,,------""""_    __,-"""""_`=--
         _..---.____.--'''''''''''_,---'  _; --'  ___,-'___
-      ,':::::,--.::'''''' ''''''' ___,--'   __,-';    __,-"""
+      ,':::::,--.::'''''' ''''''' ___,--'   __,-';    __,-""""
      ;:::::,'   |::'' '''' '===)-' __; _,--'    ;---''
     |:: @,'    ;:;\ ''''==== =),--'_,-'   ` )) ;
     `:::'    _;:/  `._=== ===)_,-,-' `  )  `  ;
@@ -48,8 +48,21 @@ gt = <<'eos'
                         `=='
 eos
 
-target = ARGV[0]
-fail "Usage: #{$0} <target pid> [fuzzfactor]" unless Integer(target)
+def usage
+  "#{gt}\n Fuzz received ALPC messages in the memory of <dest> iff \n" <<
+  " they are from <source> (0 for any)\n" <<
+  " Usage: #{$0} <source> <dest> [fuzzfactor]\n" <<
+  " (did not run, try again)\n"
+end
+
+fail usage unless ARGV[0] && ARGV[1]
+begin
+  source = Integer(ARGV[0])
+  dest = Integer(ARGV[1])
+rescue
+  fail usage
+end
+
 
 debugger = Buggery::Debugger.new
 
@@ -107,6 +120,7 @@ def millerfuzz data, fuzzfactor
   working_copy = data.clone
 
   fuzzed_bytes = (data.bytesize / fuzzfactor).ceil
+  fuzzed_bytes = 1 if fuzzed_bytes.zero?
   while working_copy == data
     rand(1..fuzzed_bytes).times do
       working_copy[rand(data.bytesize)] = rand(256).chr
@@ -129,13 +143,18 @@ bp_proc = lambda {|_|
     msg_offset = p_msg.address
     msg_len = debugger.read_virtual( msg_offset+2, 2 ).unpack('s').first
 
-    if msg_len >= PORT_MESSAGE_SIZE
-      # Could probably be optimized for speed, but this version is readable
+    if msg_len > PORT_MESSAGE_SIZE
+
+      # Could be optimized for speed, but this version is readable
       msg = debugger.read_virtual msg_offset, msg_len
-      logger.push msg
-      fuzzed = msg[0,PORT_MESSAGE_SIZE] << millerfuzz(msg[PORT_MESSAGE_SIZE..-1], MILLER_FACTOR)
-      logger.push fuzzed # before and after...
-      debugger.write_virtual msg_offset, fuzzed
+
+      if source.zero? || PORT_MESSAGE.read(msg).process == source
+        logger.push msg
+        fuzzed = msg[0,PORT_MESSAGE_SIZE] << millerfuzz(msg[PORT_MESSAGE_SIZE..-1], MILLER_FACTOR)
+        logger.push fuzzed # before and after...
+        debugger.write_virtual msg_offset, fuzzed
+      end
+
     end
 
   rescue
@@ -159,6 +178,7 @@ exception_proc = lambda {|args|
       puts debugger.execute "ub @$ip"
       puts debugger.execute "u @$ip"
       puts debugger.execute "r"
+      puts debugger.execute "kb"
     }
     abort.push true
     return DebugControl::DEBUG_STATUS_BREAK
@@ -180,7 +200,7 @@ exception_proc = lambda {|args|
 begin
   debugger.execute "!load winext\\msec.dll" # will not break if msec isn't there
   debugger.event_callbacks.add breakpoint: bp_proc, exception: exception_proc
-  debugger.attach target
+  debugger.attach dest
   debugger.break
   debugger.wait_for_event # post attach
 rescue
