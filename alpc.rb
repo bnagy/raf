@@ -1,4 +1,22 @@
+require 'bindata'
+
 module ALPC
+
+  # I untangled a lot of unions here, see ntlpcapi.h for details
+  class PORT_MESSAGE < BinData::Record
+    endian :little
+    uint16 :data_length
+    uint16 :total_length
+    uint16 :type
+    uint16 :data_info_offset
+    uint64 :process
+    uint64 :thread
+    uint32 :message_id
+    uint32 :pad
+    uint64 :client_view_size # or callback id
+  end
+
+  PORT_MESSAGE_SIZE = 0x28
 
   def local_kernel_target?
     @p_target_class      ||= p_ulong
@@ -11,7 +29,9 @@ module ALPC
   end
 
   def get_processes_k
+
     raise "No local kernel target" unless local_kernel_target?
+
     # Get a list of processes from the kernel side
     processes = self.execute("!process 0 0")
     processes.sub! "**** NT ACTIVE PROCESS DUMP ****\n", ''
@@ -21,8 +41,10 @@ module ALPC
     #   Image: System
     #
     chunks = processes.split("\n\n")
+    
     # Slurp them into a hash
     p_ary = chunks.map {|chunk| Hash[*chunk.delete(":\n").squeeze(' ').split(' ')]}
+    
     # clean up
     final = {}
     p_ary.each {|p|
@@ -35,15 +57,18 @@ module ALPC
         ppid:         p['ParentCid'].to_i(16),
         dir_base:     p['DirBase'].to_i(16),
         object_table: p['ObjectTable'].to_i(16),
-        handle_count: p['HandleCount'][0..-2].to_i(10),
+        handle_count: p['HandleCount'][0..-2].to_i(10), # remove trailing '.'
         image:        p['Image']
       }
+
     }
     final
   end
 
   def get_alpc_connections proc_obj
+
     raise "No local kernel target" unless local_kernel_target?
+
     # Get all the ALPC ports this process is connected to
     lpp = self.execute("!alpc /lpp 0n#{proc_obj}").lines.map(&:chomp)
     #
@@ -72,10 +97,13 @@ module ALPC
       }
     }
     connections
+
   end
 
   def get_alpc_ports proc_obj
+
     raise "No local kernel target" unless local_kernel_target?
+
     # Get all the ALPC ports this process hosts
     lpp = self.execute("!alpc /lpp 0n#{proc_obj}")
     unless lpp =~ /Ports created by the process/
@@ -94,6 +122,7 @@ module ALPC
     #  fffffa80353ce070 0 -> fffffa8033c2a6b0('ThemeApiPort') 0 fffffa8032fd2b30('svchost.exe')
     #  fffffa80365bb8c0 0 -> fffffa803211a5a0('lsasspirpc') 0 fffffa80320a3440('lsass.exe')
     #  fffffa80365b2e60 0 -> fffffa8032174cf0('ntsvcs') 19 fffffa803207fb30('services.exe')
+
     ports = {}
     while line = lpp.shift
       break if line =~ /Ports the process .* is connected to/
@@ -103,9 +132,12 @@ module ALPC
       end
     end
     ports
+
   end
 
   def get_handles_k proc_obj
+
+
     raise "No local kernel target" unless local_kernel_target?
     # Map userland handle ids to kernel object ids - this is the slowest part,
     # because we walk the whole handle list
@@ -128,6 +160,7 @@ module ALPC
     # 0008: Object: fffff8a005c7a120  GrantedAccess: 00000003
     #
     # 000c: Object: fffffa8032122f20  GrantedAccess: 00100020
+
     chunks = handles.split("\n\n")
     hids = {}
     chunks.each {|chunk|
@@ -138,10 +171,13 @@ module ALPC
     # make it a two-way lookup, hids and object ids can't collide.
     hids.update hids.invert
     hids
+
   end
 
   def get_absolute_port_name port_obj
+
     raise "No local kernel target" unless local_kernel_target?
+
     # Follow each ALPC Port object back to the root of the Object Directory so we
     # get the "absolute" ALPC Port name.
     # Working backwards to the root, like this:
@@ -173,6 +209,7 @@ module ALPC
     end
 
     "\\#{name.join('\\')}"
+    
   end
 
 end

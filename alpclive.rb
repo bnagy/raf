@@ -1,6 +1,5 @@
 require 'buggery'
 require 'thread'
-require 'bindata'
 require 'hexdump'
 require 'csv'
 
@@ -36,22 +35,6 @@ end
 
 refresh_pids
 
-# I untangled a lot of unions here, see ntlpcapi.h for details
-class PORT_MESSAGE < BinData::Record
-  endian :little
-  uint16 :data_length
-  uint16 :total_length
-  uint16 :type
-  uint16 :data_info_offset
-  uint64 :process
-  uint64 :thread
-  uint32 :message_id
-  uint32 :pad
-  uint64 :client_view_size # or callback id
-end
-
-PORT_MESSAGE_SIZE = 0x28
-
 # Parsing thread
 output_q = Queue.new
 Thread.new do
@@ -65,7 +48,7 @@ Thread.new do
       # purpose, so we didn't record their names in the kernel phase
       next unless name
 
-      m = PORT_MESSAGE.read(raw)
+      m = ALPC::PORT_MESSAGE.read(raw)
 
       if m.process.nonzero?
         conn_mtx.synchronize {
@@ -113,7 +96,7 @@ bp_proc = lambda {|args|
       msg_offset = p_msg.address
       total_length = debugger.read_virtual( msg_offset+2, 2 ).unpack('s').first
 
-      if total_length >= PORT_MESSAGE_SIZE
+      if total_length >= ALPC::PORT_MESSAGE_SIZE
         hid = last_hid[tid]
         raw_msg = debugger.read_virtual(msg_offset, total_length)
         output_q.push [hid, raw_msg]
@@ -136,7 +119,7 @@ bp_proc = lambda {|args|
       hid = debugger.read_virtual( ptr, 8 ).unpack('Q').first
       conn_q.push "New connection: HID: #{hid} -> #{name}"
       conn_mtx.synchronize {
-        # FIXME live_conns should probably just be name -> conn
+        # FIXME should live_conns just be name -> conn ?
         carry = 0
         old_conns = live_conns.select {|hid,c| c[:name] == name}
         old_conns.each {|old_hid,old_conn|
@@ -159,6 +142,11 @@ bp_proc = lambda {|args|
 
 debugger.event_callbacks.add breakpoint: bp_proc
 
+# Before we start, we need to know which external ALPC ports the existing
+# userland handles are connected to. There's no way to find this out from
+# userland or the ALPC API, so we're going to use the local kernel connection
+# support.
+
 puts "Connecting to local kernel to track existing ALPC handles"
 puts "(allow several seconds)"
 debugger.attach_local_kernel
@@ -166,8 +154,8 @@ debugger.wait_for_event
 
 # Get a list of processes from the kernel side
 procs = debugger.get_processes_k
-target_proc = procs.find {|k,v| v[:pid] == target.to_i }.last
-unless target
+_, target_proc = procs.find {|k,v| v[:pid] == target.to_i }
+unless target_proc
   warn "Unable to find target #{target}"
   fail "Usage: #{$0} <target pid>"
 end
@@ -178,19 +166,26 @@ hids = debugger.get_handles_k target_proc[:object]
 
 puts "Existing external ALPC Port handles:"
 conns.each {|src,dst|
+  begin
+    dst_proc_info = procs[dst[:proc]]
+    hid = hids[src]
 
-  dst_proc_obj = procs[dst[:proc]]
-  hid = hids[src]
+    unless dst_proc_info
+      fail "Unable to find dest process information for port #{src}"
+    end
+    unless hid
+      raise "Unable to find #{src}, retrying (^C to exit)"
+      retry
+    end
 
-  unless dst_proc_obj
-    fail "Unable to find dest process for port #{src} in kernel phase"
+    puts "HID: #{hid} -> #{dst_proc_info[:image]} : #{dst[:name]}"
+
+    live_conns[hid][:name] = dst[:name]
+    live_conns[hid][:pid] = dst_proc_info[:pid]
+  rescue
+    warn $!
+    retry
   end
-  fail "Unable to find #{src} in:\n#{hids}" unless hid
-
-  puts "HID: #{hid} -> #{dst_proc_obj[:image]} : #{dst[:name]}"
-
-  live_conns[hid][:name] = dst[:name]
-  live_conns[hid][:pid] = dst_proc_obj[:pid]
 }
 
 puts "Detaching from local kernel."
@@ -250,17 +245,24 @@ Thread.new do
       end
       puts
 
+      # TODO - we retain traffic counters to dead processes / ports by design,
+      # but maybe we should remove it after a while, or add a gets option to
+      # prune it?
+
       conn_mtx.synchronize {
         live_conns.each {|hid, c|
 
           next unless c[:count] > 0 || c[:name]
 
-          refresh_pids unless @pids[c[:pid]]
+          unless @pids[c[:pid]]
+            refresh_pids
+            next
+          end
 
           user = @pids[c[:pid]]["User Name"]
           img = @pids[c[:pid]]["Image Name"]
           # Add a slight visual cue for ports that received this tick
-          recv = "Recv:"
+          recv = "recv:"
           if c[:count] > c[:last_count]
             recv = "RECV>"
             c[:last_count] = c[:count]

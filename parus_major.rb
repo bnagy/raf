@@ -2,7 +2,10 @@ require 'buggery'
 require 'thread'
 require 'bindata'
 require 'hexdump'
+require 'trollop'
 require 'pp'
+
+require 'alpc'
 
 include Buggery::Structs
 include Buggery::Raw
@@ -37,7 +40,7 @@ gt = <<'eos'
     |:: @,'    ;:;\ ''''==== =),--'_,-'   ` )) ;
     `:::'    _;:/  `._=== ===)_,-,-' `  )  `  ;
      | ;--.;:::; `    `-._=_)_.-'   `  `  )  /`-._
-     '        `-:.  `         `    `  ) )  ,'`-.. \
+     '/       `-:.  `         `    `  ) )  ,'`-.. \
                  `:_ `    `        )    _,'     | :
                     `-._    `  _--  _,-'        | :
                         `----..\  \'            | |
@@ -48,49 +51,32 @@ gt = <<'eos'
                         `=='
 eos
 
-def usage
-  "#{gt}\n Fuzz received ALPC messages in the memory of <dest> iff \n" <<
-  " they are from <source> (0 for any)\n" <<
-  " Usage: #{$0} <source> <dest> [fuzzfactor]\n" <<
-  " (did not run, try again)\n"
+OPTS=Trollop::options do
+  opt :port, "only fuzz messages on this ALPC port", type: :strings
+  opt :src, "source pid ( fuzz messages arriving from this pid )", type: :integer
+  opt :dst, "destination pid ( fuzz messages inside this pid )", type: :integer, required: true
+  opt :fuzzfactor, "millerfuzz fuzzfactor ( bigger numbers less fuzzy)", type: :float, default: 20.0
+  opt :barrier, "number of bytes after the PORT_MESSAGE header NOT to fuzz", type: :integer, default: 0
 end
-
-fail usage unless ARGV[0] && ARGV[1]
-begin
-  source = Integer(ARGV[0])
-  dest = Integer(ARGV[1])
-rescue
-  fail usage
-end
-
 
 debugger = Buggery::Debugger.new
+debugger.extend ALPC
+target_hid = nil
+target_port = OPTS[:port].join(' ') if OPTS[:port]
+# Used to track per-thread which HID started the call to NtAlpcSendReceivePort
+last_hid = {}
 
-# I untangled a lot of unions here, see ntlpcapi.h for details
-class PORT_MESSAGE < BinData::Record
-  endian :little
-  uint16 :data_length
-  uint16 :total_length
-  uint16 :type
-  uint16 :data_info_offset
-  uint64 :process
-  uint64 :thread
-  uint32 :message_id
-  uint32 :pad
-  uint64 :client_view_size # or callback id
-end
+# purely for readability
+HEADERSIZE = ALPC::PORT_MESSAGE_SIZE
 
-PORT_MESSAGE_SIZE = 0x28
-
-# Do parsing and display in a separate thread so that the callback proc can be
-# as speedy as possible
+# Output thread
 mut = Mutex.new
 logger = Queue.new
 Thread.new do
   loop do
 
     s = logger.pop
-    m = PORT_MESSAGE.read(s)
+    m = ALPC::PORT_MESSAGE.read(s)
     mut.synchronize {
       puts '='*80
       puts
@@ -99,7 +85,7 @@ Thread.new do
       puts "Thread:   #{m.thread}"
       puts "Id:       #{m.message_id}"
       puts
-      puts Hexdump.dump s[PORT_MESSAGE_SIZE..-1]
+      puts Hexdump.dump s[ALPC::PORT_MESSAGE_SIZE..-1]
       puts
       $stdout.flush
     }
@@ -107,19 +93,13 @@ Thread.new do
   end
 end
 
-if ARGV[1]
-  MILLER_FACTOR = Float(ARGV[1])
-else
-  MILLER_FACTOR = 20.0
-end
-
-def millerfuzz data, fuzzfactor
+def millerfuzz data
 
   # You could optimise slightly by corrupting the caller's data directly, but I
   # have been burnt too many times in the past.
   working_copy = data.clone
 
-  fuzzed_bytes = (data.bytesize / fuzzfactor).ceil
+  fuzzed_bytes = (data.bytesize / OPTS[:fuzzfactor]).ceil
   fuzzed_bytes = 1 if fuzzed_bytes.zero?
   while working_copy == data
     rand(1..fuzzed_bytes).times do
@@ -127,38 +107,83 @@ def millerfuzz data, fuzzfactor
     end
   end
 
+  if working_copy.bytesize != data.bytesize
+    fail "Internal error: data size changed while fuzzing"
+  end
+
   working_copy
 
 end
 
-# Callback for breakpoint events
-bp_proc = lambda {|_|
+# shared, because the debugger itself is single threaded
+pulong = FFI::MemoryPointer.new :ulong
+
+# our callback, invoked at every breakpoint event
+bp_proc = lambda {|args|
 
   begin
 
-    p_msg = debugger.read_pointers( debugger.registers['rsp']+0x28 ).first
-    return 1 if p_msg.null? # no receive buffer
+    bp = DebugBreakpoint3.new args[:breakpoint]
+    bp.GetId pulong
+    bpid = pulong.read_ulong
 
-    # hackily (quickly) get total length
-    msg_offset = p_msg.address
-    msg_len = debugger.read_virtual( msg_offset+2, 2 ).unpack('s').first
+    debugger.raw.DebugSystemObjects.GetCurrentThreadId pulong
+    tid = pulong.read_ulong
 
-    if msg_len > PORT_MESSAGE_SIZE
+    # You could optimise this whole thing a bit by defining a different
+    # callback for when no specific target port is given. In that case,
+    # there's no need to parse the DebugBreakpoint3 struct, and no need to
+    # break on the function entry.
+    case bpid
+    when 1 # NtAlpcSendWaitReceivePort entry
 
-      # Could be optimized for speed, but this version is readable
-      msg = debugger.read_virtual msg_offset, msg_len
+      last_hid[tid] = debugger.registers['rcx']
 
-      if source.zero? || PORT_MESSAGE.read(msg).process == source
-        logger.push msg
-        fuzzed = msg[0,PORT_MESSAGE_SIZE] << millerfuzz(msg[PORT_MESSAGE_SIZE..-1], MILLER_FACTOR)
-        logger.push fuzzed # before and after...
-        debugger.write_virtual msg_offset, fuzzed
+    when 2 # NtAlpcSendWaitReceivePort exit
+
+      if OPTS[:port]
+        return 1 unless last_hid[tid] == target_hid
       end
 
+      p_msg = debugger.read_pointers( debugger.registers['rsp']+0x28 ).first
+      return 1 if p_msg.null? # no receive buffer
+
+      # get total length field at offset 2
+      msg_offset = p_msg.address
+      msg_len = debugger.read_virtual( msg_offset+2, 2 ).unpack('s').first
+
+      if msg_len > HEADERSIZE + OPTS[:barrier]
+
+        raw_msg = debugger.read_virtual msg_offset, msg_len
+        pm = ALPC::PORT_MESSAGE.read(raw_msg)
+
+        if OPTS[:src].nil? || pm.process == OPTS[:src]
+
+          logger.push raw_msg
+
+          header   = raw_msg[0, HEADERSIZE]
+          barrier  = raw_msg[HEADERSIZE, OPTS[:barrier]]
+          fuzzable = raw_msg[HEADERSIZE+OPTS[:barrier] .. -1]
+          fuzzed = header << barrier << millerfuzz(fuzzable)
+
+          if fuzzed.bytesize != msg_len
+            fail "Internal error: data size changed while fuzzing"
+          end
+
+          logger.push fuzzed # before and after...
+          debugger.write_virtual msg_offset, fuzzed
+
+        end
+
+      end
     end
 
   rescue
-    mut.synchronize { warn $! }
+    mut.synchronize {
+      warn $!
+      warn $@.join("\n")
+    }
+    sleep 1
   ensure
     return DebugControl::DEBUG_STATUS_GO
   end
@@ -178,7 +203,7 @@ exception_proc = lambda {|args|
       puts debugger.execute "ub @$ip"
       puts debugger.execute "u @$ip"
       puts debugger.execute "r"
-      puts debugger.execute "kb"
+      puts debugger.execute "~* kc"
     }
     abort.push true
     return DebugControl::DEBUG_STATUS_BREAK
@@ -196,26 +221,54 @@ exception_proc = lambda {|args|
   DebugControl::DEBUG_STATUS_NO_CHANGE
 }
 
-
 begin
   debugger.execute "!load winext\\msec.dll" # will not break if msec isn't there
   debugger.event_callbacks.add breakpoint: bp_proc, exception: exception_proc
-  debugger.attach dest
+  debugger.attach OPTS[:dst]
   debugger.break
   debugger.wait_for_event # post attach
 rescue
   fail "Unable to attach: #{$!}\n#{$@.join("\n")}"
 end
 
+
+# These are simple syscall gates, so they all look more or less the same.
+# We're breaking at the function entry and exit.
+#
 # ntdll!ZwAlpcSendWaitReceivePort:
-# 00000000`77041b60 4c8bd1          mov     r10,rcx
+# 00000000`77041b60 4c8bd1          mov     r10,rcx <-- bp1
 # 00000000`77041b63 b882000000      mov     eax,82h
 # 00000000`77041b68 0f05            syscall
-# 00000000`77041b6a c3              ret <--- BREAK
-#
-# We break after the syscall, which is when the kernel has filled in the
-# receive buffer
-debugger.execute "bp8008 ntdll!NtAlpcSendWaitReceivePort+0xa"
+# 00000000`77041b6a c3              ret <--- bp2
+debugger.execute "bp1 ntdll!NtAlpcSendWaitReceivePort"
+debugger.execute "bp2 ntdll!NtAlpcSendWaitReceivePort+0xa"
+
+# Because we're fuzzing in the receiving process, we don't need to grope about
+# in the kernel - the userland handle has a name element. All ALPC messages
+# for a given port ( from EVERY client ) arrive on the connection port ( the
+# one with the name ). Only the responses are sent via the server
+# communication port.
+if OPTS[:port]
+  handleout = debugger.execute("!handle 0 5").lines.map(&:chomp)
+  # Handle 3c0
+  #   Type          Event
+  #   Name          <none>
+  # Handle 3d0
+  #   Type          File
+  # Handle 3d4
+  #   Type          Event
+  #   Name          \BaseNamedObjects\TermSrvReadyEvent
+  handleout.each.with_index {|l, i|
+    if l.split(' ',2).last == target_port
+      target_hid = handleout[i-2].split(' ',2).last.to_i(16)
+      break
+    end
+  }
+  unless target_hid
+    debugger.detach_process
+    fail "No handle to #{target_port} in #{OPTS[:dst]}"
+  end
+end
 
 puts gt
 puts "Breakpoint set, starting processing loop."
