@@ -11,45 +11,45 @@ include Buggery::Structs
 include Buggery::Raw
 
 # http://www.retrojunkie.com/asciiart/animals/greattit.htm
-gt = <<'eos'
+# gt = <<'eos'
 
-    ______  ___  ______ _   _ _____  ___  ___  ___     ___  ___________
-    | ___ \/ _ \ | ___ \ | | /  ___| |  \/  | / _ \   |_  ||  _  | ___ \
-    | |_/ / /_\ \| |_/ / | | \ `--.  | .  . |/ /_\ \    | || | | | |_/ /
-    |  __/|  _  ||    /| | | |`--. \ | |\/| ||  _  |    | || | | |    /
-    | |   | | | || |\ \| |_| /\__/ / | |  | || | | |/\__/ /\ \_/ / |\ \
-    \_|   \_| |_/\_| \_|\___/\____/  \_|  |_/\_| |_/\____/  \___/\_| \_|
+#     ______  ___  ______ _   _ _____  ___  ___  ___     ___  ___________
+#     | ___ \/ _ \ | ___ \ | | /  ___| |  \/  | / _ \   |_  ||  _  | ___ \
+#     | |_/ / /_\ \| |_/ / | | \ `--.  | .  . |/ /_\ \    | || | | | |_/ /
+#     |  __/|  _  ||    /| | | |`--. \ | |\/| ||  _  |    | || | | |    /
+#     | |   | | | || |\ \| |_| /\__/ / | |  | || | | |/\__/ /\ \_/ / |\ \
+#     \_|   \_| |_/\_| \_|\___/\____/  \_|  |_/\_| |_/\____/  \___/\_| \_|
 
-                         (c) @rantyben 2014
+#                          (c) @rantyben 2014
 
 
 
-                                                            ,-,
-                                                          ,',' `,
-              Great Tit                                 ,' , ,','
-                          or                          ,' ,'  ,'
-                                                    ,' ,', ,'
-                Parus Major                       ,'  , ,,'
-                                                ,' ,', ,'
-                                              ,' , , ,'
-                                          __,',___','
-                       __,,,,,,,------""""_    __,-"""""_`=--
-        _..---.____.--'''''''''''_,---'  _; --'  ___,-'___
-      ,':::::,--.::'''''' ''''''' ___,--'   __,-';    __,-""""
-     ;:::::,'   |::'' '''' '===)-' __; _,--'    ;---''
-    |:: @,'    ;:;\ ''''==== =),--'_,-'   ` )) ;
-    `:::'    _;:/  `._=== ===)_,-,-' `  )  `  ;
-     | ;--.;:::; `    `-._=_)_.-'   `  `  )  /`-._
-     '/       `-:.  `         `    `  ) )  ,'`-.. \
-                 `:_ `    `        )    _,'     | :
-                    `-._    `  _--  _,-'        | :
-                        `----..\  \'            | |
-                               _\  \            | :
-    _____  jrei           _,--'__,-'            : :      _______
-   ()___ '-------.....__,'_ --'___________ _,--'--\\-''''  _____
-        `-------.....______\\______ _________,--._-'---''''
-                        `=='
-eos
+#                                                             ,-,
+#                                                           ,',' `,
+#               Great Tit                                 ,' , ,','
+#                           or                          ,' ,'  ,'
+#                                                     ,' ,', ,'
+#                 Parus Major                       ,'  , ,,'
+#                                                 ,' ,', ,'
+#                                               ,' , , ,'
+#                                           __,',___','
+#                        __,,,,,,,------""""_    __,-"""""_`=--
+#         _..---.____.--'''''''''''_,---'  _; --'  ___,-'___
+#       ,':::::,--.::'''''' ''''''' ___,--'   __,-';    __,-""""
+#      ;:::::,'   |::'' '''' '===)-' __; _,--'    ;---''
+#     |:: @,'    ;:;\ ''''==== =),--'_,-'   ` )) ;
+#     `:::'    _;:/  `._=== ===)_,-,-' `  )  `  ;
+#      | ;--.;:::; `    `-._=_)_.-'   `  `  )  /`-._
+#      '/       `-:.  `         `    `  ) )  ,'`-.. \
+#                  `:_ `    `        )    _,'     | :
+#                     `-._    `  _--  _,-'        | :
+#                         `----..\  \'            | |
+#                                _\  \            | :
+#     _____  jrei           _,--'__,-'            : :      _______
+#    ()___ '-------.....__,'_ --'___________ _,--'--\\-''''  _____
+#         `-------.....______\\______ _________,--._-'---''''
+#                         `=='
+# eos
 
 OPTS=Trollop::options do
   opt :port, "only fuzz messages on this ALPC port", type: :strings
@@ -57,6 +57,7 @@ OPTS=Trollop::options do
   opt :dst, "destination pid ( fuzz messages inside this pid )", type: :integer, required: true
   opt :fuzzfactor, "millerfuzz fuzzfactor ( bigger numbers less fuzzy)", type: :float, default: 20.0
   opt :barrier, "number of bytes after the PORT_MESSAGE header NOT to fuzz", type: :integer, default: 0
+  opt :monitor, "monitor mode - don't fuzz, just dump traffic", type: :boolean
 end
 
 debugger = Buggery::Debugger.new
@@ -69,27 +70,49 @@ last_hid = {}
 # purely for readability
 HEADERSIZE = ALPC::PORT_MESSAGE_SIZE
 
+def mark_changes hexdump, changes
+  return hexdump if changes.empty?
+  lines = hexdump.lines
+  changes.each {|idx|
+    #012345678 <- nine byte leadin
+    #00000000  00 00 00 00 00 00 00 00 00 00 00 00 9f 00 00 00  |................|
+    line = idx / 16
+    pos = idx % 16
+    lines[line][9 + pos*3] = '<'
+    lines[line][9 + (pos+1)*3] = '>'
+  }
+  lines.join
+end
+
 # Output thread
 mut = Mutex.new
 logger = Queue.new
 Thread.new do
   loop do
 
-    s = logger.pop
-    m = ALPC::PORT_MESSAGE.read(s)
-    mut.synchronize {
-      puts '='*80
-      puts
-      puts "Type:     0x%x" % m.type
-      puts "Process:  #{m.process}"
-      puts "Thread:   #{m.thread}"
-      puts "Id:       #{m.message_id}"
-      puts
-      puts Hexdump.dump s[ALPC::PORT_MESSAGE_SIZE..-1]
-      puts
-      $stdout.flush
-    }
+    begin
+      s, changes = logger.pop
+      m = ALPC::PORT_MESSAGE.read(s)
+      payload = ""
+      Hexdump.dump s[ALPC::PORT_MESSAGE_SIZE..-1], output: payload
+      payload = mark_changes payload, changes
 
+      mut.synchronize {
+        puts '='*80
+        puts
+        puts "Type:     0x%x" % m.type
+        puts "Process:  #{m.process}"
+        puts "Thread:   #{m.thread}"
+        puts "Id:       #{m.message_id}"
+        puts
+        puts payload
+        puts
+        $stdout.flush
+      }
+    rescue
+      puts $!
+      puts $@.join("\n")
+    end
   end
 end
 
@@ -101,9 +124,13 @@ def millerfuzz data
 
   fuzzed_bytes = (data.bytesize / OPTS[:fuzzfactor]).ceil
   fuzzed_bytes = 1 if fuzzed_bytes.zero?
+  changed = []
   while working_copy == data
+    changed.clear
     rand(1..fuzzed_bytes).times do
-      working_copy[rand(data.bytesize)] = rand(256).chr
+      idx = rand(data.bytesize)
+      working_copy[idx] = rand(256).chr
+      changed << idx
     end
   end
 
@@ -111,7 +138,7 @@ def millerfuzz data
     fail "Internal error: data size changed while fuzzing"
   end
 
-  working_copy
+  [working_copy, changed]
 
 end
 
@@ -142,11 +169,11 @@ bp_proc = lambda {|args|
     when 2 # NtAlpcSendWaitReceivePort exit
 
       if OPTS[:port]
-        return 1 unless last_hid[tid] == target_hid
+        return DebugControl::DEBUG_STATUS_GO unless last_hid[tid] == target_hid
       end
 
       p_msg = debugger.read_pointers( debugger.registers['rsp']+0x28 ).first
-      return 1 if p_msg.null? # no receive buffer
+      return DebugControl::DEBUG_STATUS_GO if p_msg.null? # no receive buffer
 
       # get total length field at offset 2
       msg_offset = p_msg.address
@@ -159,18 +186,22 @@ bp_proc = lambda {|args|
 
         if OPTS[:src].nil? || pm.process == OPTS[:src]
 
-          logger.push raw_msg
+          if OPTS[:monitor]
+            logger.push [raw_msg,[]]
+            return DebugControl::DEBUG_STATUS_GO
+          end
 
           header   = raw_msg[0, HEADERSIZE]
           barrier  = raw_msg[HEADERSIZE, OPTS[:barrier]]
           fuzzable = raw_msg[HEADERSIZE+OPTS[:barrier] .. -1]
-          fuzzed = header << barrier << millerfuzz(fuzzable)
+          fuzz, changed = millerfuzz(fuzzable)
+          fuzzed = header << barrier << fuzz
 
           if fuzzed.bytesize != msg_len
             fail "Internal error: data size changed while fuzzing"
           end
 
-          logger.push fuzzed # before and after...
+          logger.push [fuzzed, changed]
           debugger.write_virtual msg_offset, fuzzed
 
         end
@@ -270,7 +301,7 @@ if OPTS[:port]
   end
 end
 
-puts gt
+#puts gt
 puts "Breakpoint set, starting processing loop."
 puts "Hit ^C to exit...\n\n"
 

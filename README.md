@@ -78,6 +78,7 @@ Options:
                           (default: 20.0)
      --barrier, -b <i>:   number of bytes after the PORT_MESSAGE header NOT to
                           fuzz (default: 0)
+         --monitor, -m:   monitor mode - don't fuzz, just dump traffic
             --help, -h:   Show this message
 ```
 
