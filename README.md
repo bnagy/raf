@@ -66,9 +66,19 @@ Depends on:
 * rBuggery ( next branch )
 * hexdump
 * bindata
+* trollop
 
 ```
-> ruby parus_major.rb <pid> <fuzzfactor>
+> ruby parus_major.rb --help
+Options:
+       --port, -p <s+>:   only fuzz messages on this ALPC port
+         --src, -s <i>:   source pid ( fuzz messages arriving from this pid )
+         --dst, -d <i>:   destination pid ( fuzz messages inside this pid )
+  --fuzzfactor, -f <f>:   millerfuzz fuzzfactor ( bigger numbers less fuzzy)
+                          (default: 20.0)
+     --barrier, -b <i>:   number of bytes after the PORT_MESSAGE header NOT to
+                          fuzz (default: 0)
+            --help, -h:   Show this message
 ```
 
 ALPC Live
@@ -143,7 +153,9 @@ New connection: HID: 1388 -> \RPC Control\OLE31DFF995C9C34A5FB1FF49539367
 BUGS
 =======
 
-- Kidding, LOL! None of this works. It won't even run, let alone find bugs.
+Kidding, LOL! ᕕ(ᐛ)ᕗ
+
+None of this works. It won't even run, let alone find bugs. 
 
 Contributing
 =======
