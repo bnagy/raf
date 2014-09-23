@@ -203,7 +203,7 @@ module ALPC
     loop do
       lines = self.execute("!object #{next_obj} 3").lines.map(&:chomp)
       toks = lines[3].split(' ',5)
-      break if toks.last == '\\' || name.length > sane_depth
+      break if toks.last == '\\' || name.length > sane_depth || toks[-3] == '00000000'
       name.unshift toks.last
       next_obj = toks[2]
     end
