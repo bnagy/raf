@@ -39,7 +39,7 @@ Example:
 ruby raf.rb 172.16.216.100 "\\RPC Control\\DNS Resolver"
 ```
 
-Parus Major - PoC ALPC MitM 
+Parus Major - ALPC MitM at receiver
 ======
 
 Don't get excited! 
@@ -68,12 +68,79 @@ Depends on:
 * bindata
 * trollop
 
-```
+```bash
 > ruby parus_major.rb --help
-Options:
+
+    ______  ___  ______ _   _ _____  ___  ___  ___     ___  ___________
+    | ___ \/ _ \ | ___ \ | | /  ___| |  \/  | / _ \   |_  ||  _  | ___ \
+    | |_/ / /_\ \| |_/ / | | \ `--.  | .  . |/ /_\ \    | || | | | |_/ /
+    |  __/|  _  ||    /| | | |`--. \ | |\/| ||  _  |    | || | | |    /
+    | |   | | | || |\ \| |_| /\__/ / | |  | || | | |/\__/ /\ \_/ / |\ \
+    \_|   \_| |_/\_| \_|\___/\____/  \_|  |_/\_| |_/\____/  \___/\_| \_|
+
+                         (c) @rantyben 2014
+
+
+
+                                                            ,-,
+                                                          ,',' `,
+              Great Tit                                 ,' , ,','
+                          or                          ,' ,'  ,'
+                                                    ,' ,', ,'
+                Parus Major                       ,'  , ,,'
+                                                ,' ,', ,'
+                                              ,' , , ,'
+                                          __,',___','
+                       __,,,,,,,------""""_    __,-"""""_`=--
+        _..---.____.--'''''''''''_,---'  _; --'  ___,-'___
+      ,':::::,--.::'''''' ''''''' ___,--'   __,-';    __,-""""
+     ;:::::,'   |::'' '''' '===)-' __; _,--'    ;---''
+    |:: @,'    ;:;\ ''''==== =),--'_,-'   ` )) ;
+    `:::'    _;:/  `._=== ===)_,-,-' `  )  `  ;
+     | ;--.;:::; `    `-._=_)_.-'   `  `  )  /`-._
+     '/       `-:.  `         `    `  ) )  ,'`-.. \
+                 `:_ `    `        )    _,'     | :
+                    `-._    `  _--  _,-'        | :
+                        `----..\  \'            | |
+                               _\  \            | :
+    _____  jrei           _,--'__,-'            : :      _______
+   ()___ '-------.....__,'_ --'___________ _,--'--\\-''''  _____
+        `-------.....______\\______ _________,--._-'---''''
+                        `=='
+
        --port, -p <s+>:   only fuzz messages on this ALPC port
          --src, -s <i>:   source pid ( fuzz messages arriving from this pid )
          --dst, -d <i>:   destination pid ( fuzz messages inside this pid )
+  --fuzzfactor, -f <f>:   millerfuzz fuzzfactor ( bigger numbers less fuzzy)
+                          (default: 20.0)
+     --barrier, -b <i>:   number of bytes after the PORT_MESSAGE header NOT to
+                          fuzz (default: 0)
+         --monitor, -m:   monitor mode - don't fuzz, just dump traffic
+            --help, -h:   Show this message
+```
+
+Parus Minor -- ALPC MitM at sender 
+=====
+
+Like Parus Major, but fuzzes messages FROM a given PID TO one ( and only one )
+destination ALPC port. You don't need to find which PID hosts the port. Also,
+you can deliver to ports in undebuggable processes this way ( eg csrss.exe ).
+
+Depends on:
+* rBuggery ( next branch ) with local kernel support ( README_LOCAL_KERNEL )
+* hexdump
+* bindata
+* trollop
+
+```bash
+                              _
+ ___ ___ ___ _ _ ___    _____|_|___ ___ ___
+| . | .'|  _| | |_ -|  |     | |   | . |  _|
+|  _|__,|_| |___|___|  |_|_|_|_|_|_|___|_|
+|_| (c) 2014 @rantyben
+
+       --port, -p <s+>:   only fuzz messages to this ALPC port
+         --src, -s <i>:   source pid ( fuzz messages arriving from this pid )
   --fuzzfactor, -f <f>:   millerfuzz fuzzfactor ( bigger numbers less fuzzy)
                           (default: 20.0)
      --barrier, -b <i>:   number of bytes after the PORT_MESSAGE header NOT to
@@ -86,15 +153,15 @@ ALPC Live
 ======
 
 Monitor a given PID for active ALPC connections to other processes. Use this
-to find interesting targets for Parus Major. Choose a non-privileged app you
-have bugs in, then exercise it to watch the ALPC ports it talks to.
+to find interesting targets for Parus Major / Minor. Choose a non-privileged
+app you have bugs in, then exercise it to watch the ALPC ports it talks to.
 
 Depends on:
 * rBuggery ( next branch ) with local kernel support ( README_LOCAL_KERNEL )
 * hexdump
 * bindata
 
-```
+```bash
 > ruby alpclive.rb 3000
 Connecting to local kernel to track existing ALPC handles
 (allow several seconds)

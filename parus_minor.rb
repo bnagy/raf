@@ -10,7 +10,17 @@ require 'alpc'
 include Buggery::Structs
 include Buggery::Raw
 
+minor = <<-EOS                  
+                              _             
+ ___ ___ ___ _ _ ___    _____|_|___ ___ ___ 
+| . | .'|  _| | |_ -|  |     | |   | . |  _|
+|  _|__,|_| |___|___|  |_|_|_|_|_|_|___|_|  
+|_| (c) 2014 @rantyben
+ 
+EOS
+
 OPTS=Trollop::options do
+  banner minor
   opt :port, "only fuzz messages to this ALPC port", type: :strings, required: true
   opt :src, "source pid ( fuzz messages arriving from this pid )", type: :integer, required: true
   opt :fuzzfactor, "millerfuzz fuzzfactor ( bigger numbers less fuzzy)", type: :float, default: 20.0
@@ -20,13 +30,15 @@ end
 
 debugger = Buggery::Debugger.new
 debugger.extend ALPC
+
 target_hid = nil
 target_port = OPTS[:port].join(' ') if OPTS[:port]
-# Used to track per-thread which HID started the call to NtAlpcSendReceivePort
-last_hid = {}
+
 # Used to track per-thread the new HID pointer that will be filled in by
 # NtAlpcConnectPort, so it can be read out at the ret breakpoint
 last_hidptr = {}
+
+
 
 # purely for readability
 HEADERSIZE = ALPC::PORT_MESSAGE_SIZE
@@ -39,8 +51,8 @@ def mark_changes hexdump, changes
     #00000000  00 00 00 00 00 00 00 00 00 00 00 00 9f 00 00 00  |................|
     line = idx / 16
     pos = idx % 16
-    lines[line][9 + pos*3] = '<'
-    lines[line][9 + (pos+1)*3] = '>'
+    lines[line][9 + pos*3] = '!'
+    lines[line][9 + pos*3 + 3] = '!'
   }
   lines.join
 end
@@ -85,13 +97,13 @@ def millerfuzz data
 
   fuzzed_bytes = (data.bytesize / OPTS[:fuzzfactor]).ceil
   fuzzed_bytes = 1 if fuzzed_bytes.zero?
-  changed = []
+  changes = []
   while working_copy == data
-    changed.clear
+    changes.clear
     rand(1..fuzzed_bytes).times do
       idx = rand(data.bytesize)
       working_copy[idx] = rand(256).chr
-      changed << idx
+      changes << idx
     end
   end
 
@@ -99,12 +111,11 @@ def millerfuzz data
     fail "Internal error: data size changed while fuzzing"
   end
 
-  [working_copy, changed]
+  [working_copy, changes]
 
 end
 
-# shared, because the debugger itself is single threaded
-pulong = FFI::MemoryPointer.new :ulong
+
 # Relevant:
 # NTSYSCALLAPI
 # NTSTATUS
@@ -119,6 +130,10 @@ pulong = FFI::MemoryPointer.new :ulong
 #     __inout_opt PALPC_MESSAGE_ATTRIBUTES ReceiveMessageAttributes,
 #     __in_opt PLARGE_INTEGER Timeout
 #     );
+
+# shared / reusable pointer, because the debugger itself is single threaded
+pulong = FFI::MemoryPointer.new :ulong
+
 # our callback, invoked at every breakpoint event
 bp_proc = lambda {|args|
 
@@ -169,23 +184,23 @@ bp_proc = lambda {|args|
       # NTAPI
       # NtAlpcConnectPort(
       #     __out PHANDLE PortHandle,
-      #     __in PUNICODE_STRING PortName,
+      #     __in PUNICODE_STRING PortName, <-- rdx
       #     __in POBJECT_ATTRIBUTES ObjectAttributes,
       # [...]
-
     when 3 # NtAlpcConnectPort entry
-      # Arg 2 ( in rdx ) is a pointer to a UNICODE_STRING structure. It starts
-      # with a two-entry length header instead of just being a pointer to a
-      # null terminated wstr. We're using windbg commands instead of messing
-      # around following two layers of pointers. This way if that address is
-      # invalid we'll just get ?????? as the name instead of an AV
+      # A UNICODE_STRING structure starts with a two-entry length header
+      # instead of just being a pointer to a null terminated wstr. Here we're
+      # using windbg commands instead of messing around following two layers
+      # of pointers - this way if an address is invalid we'll just get ??????
+      # as the name instead of a read AV
       output = debugger.execute "du poi(@rdx+8)"
       name = output.lines.map {|l| l.split(' ', 2).last.chomp }.join.delete('"')
-      # save the handle pointer address - rcx is volatile
+      # save the handle pointer - rcx is volatile
       last_hidptr[tid] = [debugger.registers['rcx'], name]
 
     when 4 # NtAlpcConnectPort exit
 
+      # TODO if the call failed I think the hid is zero? Deal with that? If so, how?
       ptr, name = last_hidptr[tid]
       hid = debugger.read_virtual( ptr, 8 ).unpack('Q').first
       if name == target_port
@@ -200,7 +215,7 @@ bp_proc = lambda {|args|
     mut.synchronize {
       warn $!
       warn $@.join("\n")
-      puts debugger.execute('r')
+      warn debugger.execute('r')
     }
     sleep 1
   ensure
@@ -214,6 +229,8 @@ exception_proc = lambda {|args|
 
   exr = ExceptionRecord64.new args[:exception_record]
 
+  # We're fuzzing the source, here, so second chance exceptions aren't
+  # expected.
   if args[:first_chance].zero?
 
     mut.synchronize {
@@ -224,11 +241,17 @@ exception_proc = lambda {|args|
       puts debugger.execute "r"
       puts debugger.execute "~* kc"
     }
+    # let it die
     abort.push true
-    return DebugControl::DEBUG_STATUS_BREAK
+    return DebugControl::DEBUG_STATUS_GO
 
   else
 
+    # It's common to receive LRPC exceptions. Hopefully they come _after_ the
+    # receiving process has tried and failed to process our fuzzed message. My
+    # initial tests suggest that all fuzz AFTER the ALPC PORT_MESSAGE header
+    # arrives at the destination, even invalid ncalrpc message types etc, but
+    # more extensive monitoring might be required.
     mut.synchronize{
       puts '-'*80
       puts "0x#{exr.code} @ 0x#{exr.address} - First chance"
@@ -278,16 +301,16 @@ src, dst = conns.find {|s, d| d[:name] == target_port}
 target_hid = hids[src]
 
 unless target_hid
+  # So, we're not connected to that ALPC port yet. That's cool. Once the
+  # process connects we'll grab the HID via the NtAlpcCreatePort hook and then
+  # start fuzzing. Same goes for when we get booted from some services - the
+  # process will reconnect, and we'll pick up the new HID.
   warn "Unable to find connection to #{target_port}, waiting..."
 end
 
 puts "Detaching from local kernel."
 
-# Now we have a map of userland handles to kernel objects, and we have details
-# on all the kernel objects that back handles to ALPC ports in other
-# processes. From here, new connections can be tracked via userland breakpoint
-# hooks.
-debugger.detach_process
+debugger.detach_process # farewell kernel - hello userland!
 
 begin
   debugger.execute "!load winext\\msec.dll" # will not break if msec isn't there
@@ -312,6 +335,8 @@ debugger.execute "bp1 ntdll!NtAlpcSendWaitReceivePort"
 debugger.execute "bp3 ntdll!NtAlpcConnectPort"
 debugger.execute "bp4 ntdll!NtAlpcConnectPort+0xa"
 
+puts minor
+sleep 3
 puts "Breakpoint set, starting processing loop."
 puts "Hit ^C to exit...\n\n"
 
