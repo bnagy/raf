@@ -69,8 +69,6 @@ Depends on:
 * trollop
 
 ```
-> ruby parus_major.rb --help
-
     ______  ___  ______ _   _ _____  ___  ___  ___     ___  ___________
     | ___ \/ _ \ | ___ \ | | /  ___| |  \/  | / _ \   |_  ||  _  | ___ \
     | |_/ / /_\ \| |_/ / | | \ `--.  | .  . |/ /_\ \    | || | | | |_/ /
@@ -119,7 +117,7 @@ Depends on:
             --help, -h:   Show this message
 ```
 
-Parus Minor -- ALPC MitM at sender 
+Parus Minor - ALPC MitM at sender 
 =====
 
 Like Parus Major, but fuzzes messages FROM a given PID TO one ( and only one )
@@ -223,7 +221,8 @@ BUGS
 
 Kidding, LOL! ᕕ(ᐛ)ᕗ
 
-None of this works. It won't even run, let alone find bugs. 
+None of this works. It won't even run, let alone find bugs. Carry on about
+your business, and ignore this non-working code.
 
 Contributing
 =======
@@ -234,6 +233,3 @@ License
 =======
 
 BSD Style, See LICENSE file for details
-
-
-

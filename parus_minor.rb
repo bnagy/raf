@@ -1,3 +1,9 @@
+# Part of a series of PoC tools for ALPC fuzzing
+# Original source at:
+# https://github.com/bnagy/raf
+# https://github.com/bnagy/rBuggery
+# (c) Ben Nagy, 2014, provided under the BSD License
+
 require 'buggery'
 require 'thread'
 require 'bindata'
@@ -37,8 +43,6 @@ target_port = OPTS[:port].join(' ') if OPTS[:port]
 # Used to track per-thread the new HID pointer that will be filled in by
 # NtAlpcConnectPort, so it can be read out at the ret breakpoint
 last_hidptr = {}
-
-
 
 # purely for readability
 HEADERSIZE = ALPC::PORT_MESSAGE_SIZE
@@ -230,7 +234,7 @@ exception_proc = lambda {|args|
   exr = ExceptionRecord64.new args[:exception_record]
 
   # We're fuzzing the source, here, so second chance exceptions aren't
-  # expected.
+  # expected, but if they happen they might be useful?
   if args[:first_chance].zero?
 
     mut.synchronize {
@@ -277,7 +281,7 @@ debugger.wait_for_event
 procs = debugger.get_processes_k
 _, target_proc = procs.find {|k,v| v[:pid] == OPTS[:src] }
 unless target_proc
-  warn "Unable to find target #{OPTS[:src]}"
+  warn "Unable to find target #{OPTS[:src]}. Usage: #{$0} --help"
   debugger.detach_process
   exit
 end
@@ -292,7 +296,7 @@ conns.each {|src,dst|
   dst_proc_info = procs[dst[:proc]]
   hid = hids[src]
   unless dst_proc_info
-    fail "Unable to find dest process information for port #{src}"
+    fail "Unable to find dest process information for port #{src}. Usage: #{$0} --help"
   end
   puts "HID: #{hid} -> #{dst_proc_info[:image]} : #{dst[:name]}"
 }

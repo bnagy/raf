@@ -1,3 +1,9 @@
+# Part of a series of PoC tools for ALPC fuzzing
+# Original source at:
+# https://github.com/bnagy/raf
+# https://github.com/bnagy/rBuggery
+# (c) Ben Nagy, 2014, provided under the BSD License
+
 require 'buggery'
 require 'thread'
 require 'bindata'
