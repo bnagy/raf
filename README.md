@@ -68,7 +68,7 @@ Depends on:
 * bindata
 * trollop
 
-```bash
+```
 > ruby parus_major.rb --help
 
     ______  ___  ______ _   _ _____  ___  ___  ___     ___  ___________
@@ -132,7 +132,7 @@ Depends on:
 * bindata
 * trollop
 
-```bash
+```
                               _
  ___ ___ ___ _ _ ___    _____|_|___ ___ ___
 | . | .'|  _| | |_ -|  |     | |   | . |  _|
@@ -161,7 +161,7 @@ Depends on:
 * hexdump
 * bindata
 
-```bash
+```
 > ruby alpclive.rb 3000
 Connecting to local kernel to track existing ALPC handles
 (allow several seconds)
