@@ -31,6 +31,7 @@ module ALPC
 
   PORT_MESSAGE_SIZE = 0x28
 
+  # just avert your eyes for 10 lines
   def local_kernel_target?
     @p_target_class      ||= p_ulong
     @p_target_qualifier  ||= p_ulong

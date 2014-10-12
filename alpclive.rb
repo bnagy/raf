@@ -5,11 +5,17 @@
 # (c) Ben Nagy, 2014, provided under the BSD License
 
 require 'buggery'
+
+v = Buggery::VERSION
+unless v >= '1.1.1'
+  fail "Sorry, need rBuggery 1.1.1 or greater for lazy breakpoints, found #{v}"
+end
+
 require 'thread'
 require 'hexdump'
 require 'csv'
 
-require 'alpc'
+require_relative 'alpc'
 
 include Buggery::Raw
 include Buggery::Structs
@@ -59,13 +65,16 @@ Thread.new do
       if m.process.nonzero?
         conn_mtx.synchronize {
           live_conns[hid][:count] += 1
-          live_conns[hid][:pid] = m.process
+          # bindata returns some crazy type under MRI that needs to be
+          # converted to an integer
+          live_conns[hid][:pid] = Integer(m.process)
         }
       end
 
     rescue
       puts $!
       puts $@.join("\n")
+      sleep 1
     end
 
   end
@@ -79,9 +88,13 @@ bp_proc = lambda {|args|
 
   begin
 
+    # Use the new lazy breakpoint from rBuggery 1.1.1, this saves a lot of
+    # work for callbacks like this where we're hitting breakpoints fairly
+    # heavily.
+    @bp ||= LazyBreakpoint.new args[:breakpoint]
+    @bp.ptr = args[:breakpoint] # update pointer for existing bp obj
 
-    bp = DebugBreakpoint3.new args[:breakpoint]
-    bp.GetId pulong
+    @bp.GetId pulong
     bpid = pulong.read_ulong
 
     debugger.raw.DebugSystemObjects.GetCurrentThreadId pulong
@@ -158,21 +171,22 @@ puts "(allow several seconds)"
 debugger.attach_local_kernel
 debugger.wait_for_event
 
-# Get a list of processes from the kernel side
-procs = debugger.get_processes_k
-_, target_proc = procs.find {|k,v| v[:pid] == target.to_i }
-unless target_proc
-  warn "Unable to find target #{target}"
-  fail "Usage: #{$0} <target pid>"
-end
-# Existing ALPC connections
-conns = debugger.get_alpc_connections target_proc[:object]
-# Map of handle IDs to object IDs
-hids = debugger.get_handles_k target_proc[:object]
+begin
 
-puts "Existing external ALPC Port handles:"
-conns.each {|src,dst|
-  begin
+  # Get a list of processes from the kernel side
+  procs = debugger.get_processes_k
+  _, target_proc = procs.find {|k,v| v[:pid] == target.to_i }
+  unless target_proc
+    warn "Unable to find target #{target}"
+    fail "Usage: #{$0} <target pid>"
+  end
+  # Existing ALPC connections
+  conns = debugger.get_alpc_connections target_proc[:object]
+  # Map of handle IDs to object IDs
+  hids = debugger.get_handles_k target_proc[:object]
+
+  puts "Existing external ALPC Port handles:"
+  conns.each {|src,dst|
     dst_proc_info = procs[dst[:proc]]
     hid = hids[src]
 
@@ -181,19 +195,19 @@ conns.each {|src,dst|
     end
     unless hid
       raise "Unable to find #{src}, retrying (^C to exit)"
-      retry
     end
 
     puts "HID: #{hid} -> #{dst_proc_info[:image]} : #{dst[:name]}"
 
     live_conns[hid][:name] = dst[:name]
     live_conns[hid][:pid] = dst_proc_info[:pid]
-  rescue
-    warn $!
-    retry
-  end
-}
+  }
 
+rescue
+  warn $!
+  sleep 1
+  retry
+end
 puts "Detaching from local kernel."
 
 # Now we have a map of userland handles to kernel objects, and we have details
@@ -230,11 +244,18 @@ debugger.execute "bp4 ntdll!NtAlpcConnectPort+0xa"
 puts "Breakpoints set, starting processing loop."
 puts "Hit ^C to exit...\n\n"
 
-# This seems convoluted, but JRuby is kind of weird about threads, so it's
-# best to be extra nice to it.
+
 abort = Queue.new
 Signal.trap "INT" do
-  abort.push true
+  if RbConfig::CONFIG['RUBY_INSTALL_NAME']=='jruby'
+    # This seems convoluted, but JRuby is kind of weird about threads, so it's
+    # best to be extra nice to it.
+    abort.push true
+  else
+    # This will detach the debugger under MRI
+    debugger.detach_process
+    exit
+  end
 end
 
 
@@ -278,6 +299,7 @@ Thread.new do
 
         }
         puts "\n#{'=' * 40}\n"
+
       }
     rescue
       puts $!

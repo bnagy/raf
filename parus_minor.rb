@@ -5,6 +5,12 @@
 # (c) Ben Nagy, 2014, provided under the BSD License
 
 require 'buggery'
+
+v = Buggery::VERSION
+unless v >= '1.1.1'
+  fail "Sorry, need rBuggery 1.1.1 or greater for lazy breakpoints, found #{v}"
+end
+
 require 'thread'
 require 'bindata'
 require 'hexdump'
@@ -48,6 +54,7 @@ last_hidptr = {}
 HEADERSIZE = ALPC::PORT_MESSAGE_SIZE
 
 def mark_changes hexdump, changes
+  # We're receiving a hexdump string, and an array of changed offsets
   return hexdump if changes.empty?
   lines = hexdump.lines
   changes.each {|idx|
@@ -143,8 +150,13 @@ bp_proc = lambda {|args|
 
   begin
 
-    bp = DebugBreakpoint3.new args[:breakpoint]
-    bp.GetId pulong
+    # Use the new lazy breakpoint from rBuggery 1.1.1, this saves a lot of
+    # work for callbacks like this where we're hitting breakpoints fairly
+    # heavily.
+    @bp ||= LazyBreakpoint.new args[:breakpoint]
+    @bp.ptr = args[:breakpoint] # update pointer for existing bp obj
+
+    @bp.GetId pulong
     bpid = pulong.read_ulong
 
     debugger.raw.DebugSystemObjects.GetCurrentThreadId pulong
@@ -296,7 +308,9 @@ conns.each {|src,dst|
   dst_proc_info = procs[dst[:proc]]
   hid = hids[src]
   unless dst_proc_info
-    fail "Unable to find dest process information for port #{src}. Usage: #{$0} --help"
+    # Maybe the destination PID went away or something
+    warn "Unable to find dest process information for port #{src}."
+    next
   end
   puts "HID: #{hid} -> #{dst_proc_info[:image]} : #{dst[:name]}"
 }
@@ -308,7 +322,7 @@ unless target_hid
   # So, we're not connected to that ALPC port yet. That's cool. Once the
   # process connects we'll grab the HID via the NtAlpcCreatePort hook and then
   # start fuzzing. Same goes for when we get booted from some services - the
-  # process will reconnect, and we'll pick up the new HID.
+  # process will reconnect, and we'll pick up the new HID and keep fuzzing.
   warn "Unable to find connection to #{target_port}, waiting..."
 end
 

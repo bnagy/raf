@@ -1,7 +1,12 @@
 Overview
 ======
 
+These are a few tools that one could use as a starting point to poke at the
+ALPC attack surface. They're not really designed to work in a professional
+vulnerability discovery process, but it should be enough to get started.
+
 RAF - Ruby ALPC Fuzzer
+======
 
 This is a PoC. It _will_ send real traffic to real ALPC ports and produce lots
 of output on screen, but is highly unlikely to find real bugs. You are
@@ -63,7 +68,7 @@ Get a tiny, tiny bit excited?
 I apologise for the name. I have a mental age of 12.
 
 Depends on:
-* rBuggery ( next branch )
+* rBuggery
 * hexdump
 * bindata
 * trollop
@@ -121,11 +126,11 @@ Parus Minor - ALPC MitM at sender
 =====
 
 Like Parus Major, but fuzzes messages FROM a given PID TO one ( and only one )
-destination ALPC port. You don't need to find which PID hosts the port. Also,
-you can deliver to ports in undebuggable processes this way ( eg csrss.exe ).
+destination ALPC port. It will work out which PID hosts the port. Also, you
+can MitM traffic to ports in undebuggable processes this way ( eg csrss.exe ).
 
 Depends on:
-* rBuggery ( next branch ) with local kernel support ( README_LOCAL_KERNEL )
+* rBuggery with local kernel support ( README_LOCAL_KERNEL )
 * hexdump
 * bindata
 * trollop
@@ -135,7 +140,7 @@ Depends on:
  ___ ___ ___ _ _ ___    _____|_|___ ___ ___
 | . | .'|  _| | |_ -|  |     | |   | . |  _|
 |  _|__,|_| |___|___|  |_|_|_|_|_|_|___|_|
-|_| (c) 2014 @rantyben
+|_| (c) @rantyben 2014
 
        --port, -p <s+>:   only fuzz messages to this ALPC port
          --src, -s <i>:   source pid ( fuzz messages arriving from this pid )
@@ -155,7 +160,7 @@ to find interesting targets for Parus Major / Minor. Choose a non-privileged
 app you have bugs in, then exercise it to watch the ALPC ports it talks to.
 
 Depends on:
-* rBuggery ( next branch ) with local kernel support ( README_LOCAL_KERNEL )
+* rBuggery with local kernel support ( README_LOCAL_KERNEL )
 * hexdump
 * bindata
 
